@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "983671431796",
+    "project_id": "vibzche-6ecc7",
+    "storage_bucket": "vibzche-6ecc7.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:983671431796:android:c10404ff771244287ae721",
+        "android_client_info": {
+          "package_name": "com.example.vibzcheck"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBOQ_gr9NwqImQZ-HS9IGhMQGNwu_-jBqY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
