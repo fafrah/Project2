@@ -1,13 +1,12 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'user_service.dart';
 
+/// Backwards-compatible facade. New code should depend on the
+/// focused services (UserService, SessionService, QueueService,
+/// VoteService) directly.
 class FirestoreService {
-  final FirebaseFirestore _db = FirebaseFirestore.instance;
+  final UserService _users = UserService();
 
-  Future<void> createUser({required String uid, required String email}) async {
-    await _db.collection('users').doc(uid).set({
-      'email': email,
-      'username': email.split('@')[0],
-      'createdAt': Timestamp.now(),
-    });
+  Future<void> createUser({required String uid, required String email}) {
+    return _users.createUser(uid: uid, email: email);
   }
 }

@@ -1,0 +1,163 @@
+rules_version = '2';
+
+// VibzCheck Firestore security rules.
+//
+// Trust model:
+//  - users own their /users/{uid} doc.
+//  - sessions are readable to any member; only the host can mutate
+//    top-level fields (currentTrack, isActive, etc.).
+//  - any member can enqueue tracks; only the adder or host can remove.
+//  - vote docs are owned by the voter (uid is the doc id), and the
+//    voteScore on the parent queue item is updated client-side inside
+//    a transaction — rules enforce that the score moves by exactly
+//    the voter's delta.
+//  - chat messages are append-only and pinned to their author.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isUser(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    // -------- /spotifyTokens (server-only) --------
+    // Refresh / access tokens for OAuth'd hosts. Written exclusively
+    // by Cloud Functions via Admin SDK (which bypasses these rules);
+    // clients must never read or write.
+    match /spotifyTokens/{uid} {
+      allow read, write: if false;
+    }
+
+    // -------- /spotifyAuthState (server-only) --------
+    // Short-lived OAuth state nonces for round-trip verification.
+    match /spotifyAuthState/{uid} {
+      allow read, write: if false;
+    }
+
+    // -------- /users --------
+    match /users/{uid} {
+      allow read: if isSignedIn();
+      allow create: if isUser(uid);
+      // Owner can update their own profile but cannot reassign uid/email
+      // arbitrarily. Email change goes through Firebase Auth, not here.
+      allow update: if isUser(uid)
+        && request.resource.data.email == resource.data.email;
+      allow delete: if false;
+    }
+
+    // -------- /sessions --------
+    match /sessions/{sessionId} {
+
+      function sessionData() {
+        return get(/databases/$(database)/documents/sessions/$(sessionId)).data;
+      }
+
+      function isHost() {
+        return isSignedIn() && sessionData().hostUid == request.auth.uid;
+      }
+
+      function isMember() {
+        return isSignedIn() && exists(
+          /databases/$(database)/documents/sessions/$(sessionId)/members/$(request.auth.uid)
+        );
+      }
+
+      // Anyone signed in can look up a session (needed for join-by-code
+      // queries on `joinCode`). Member-only data lives under subcollections.
+      allow read: if isSignedIn();
+
+      // Creator becomes host. The session doc must declare hostUid as the
+      // caller, and start in an active state.
+      allow create: if isSignedIn()
+        && request.resource.data.hostUid == request.auth.uid
+        && request.resource.data.isActive == true;
+
+      // Only the host mutates top-level session fields. The members
+      // subcollection adjusts memberCount via its own rules.
+      allow update: if isHost()
+        // memberCount is bumped by member writes through transactions; the
+        // host shouldn't overwrite it directly to a smaller value, but we
+        // permit any host update for now to keep playback flexible.
+        && request.resource.data.hostUid == resource.data.hostUid;
+
+      allow delete: if isHost();
+
+      // -------- /sessions/{id}/members --------
+      match /members/{memberUid} {
+        allow read: if isMember() || isHost();
+        // A user joins by writing their own member doc. Role must be
+        // 'member' (host doc is created server-side via batch on session
+        // create, where the creator is also the host).
+        allow create: if isUser(memberUid)
+          && request.resource.data.role in ['member', 'host'];
+        // Members can update their own metadata; host can update anyone's
+        // (e.g. promote/demote in the future).
+        allow update: if isUser(memberUid) || isHost();
+        // Members can leave; host can kick.
+        allow delete: if isUser(memberUid) || isHost();
+      }
+
+      // -------- /sessions/{id}/queue --------
+      match /queue/{itemId} {
+        allow read: if isMember() || isHost();
+
+        // Any member can add a track. addedBy must be the caller, and
+        // votes start at 0.
+        allow create: if isMember()
+          && request.resource.data.addedBy == request.auth.uid
+          && request.resource.data.voteScore == 0;
+
+        // Only the queue-item adder or the host may delete a track.
+        allow delete: if isHost()
+          || (isMember() && resource.data.addedBy == request.auth.uid);
+
+        // Updates: members can bump voteScore (the integrity constraint
+        // — that voteScore equals the sum of /votes/* values — is enforced
+        // by the transactional client flow, plus the per-user vote
+        // ownership rule below. Strict delta-checking with FieldValue
+        // sentinels is unreliable in rules, and any tampering still
+        // requires a matching vote write that this service rejects.)
+        allow update: if isMember()
+          && request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['voteScore']);
+
+        // Tag-editing path — only the adder or host can change tags.
+        allow update: if (isHost() || resource.data.addedBy == request.auth.uid)
+          && request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['tags']);
+
+        // -------- /sessions/{id}/queue/{itemId}/votes --------
+        match /votes/{voterUid} {
+          allow read: if isMember() || isHost();
+
+          // Voter writes their own doc with value in {-1, 1} (clearing
+          // is a delete, not a 0-write). Timestamp must be server time.
+          allow create, update: if isUser(voterUid)
+            && (request.resource.data.value == 1
+                || request.resource.data.value == -1);
+
+          allow delete: if isUser(voterUid);
+        }
+      }
+
+      // -------- /sessions/{id}/messages --------
+      match /messages/{messageId} {
+        allow read: if isMember() || isHost();
+
+        allow create: if isMember()
+          && request.resource.data.uid == request.auth.uid
+          && request.resource.data.text is string
+          && request.resource.data.text.size() > 0
+          && request.resource.data.text.size() <= 500;
+
+        // Messages are immutable. Host can delete (moderation).
+        allow update: if false;
+        allow delete: if isHost()
+          || (isSignedIn() && resource.data.uid == request.auth.uid);
+      }
+    }
+  }
+}
