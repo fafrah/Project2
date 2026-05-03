@@ -6,6 +6,7 @@ import '../services/user_service.dart';
 import '../theme/app_theme.dart';
 import 'create_session_screen.dart';
 import 'join_session_screen.dart';
+import 'settings_screen.dart';
 
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
@@ -20,6 +21,17 @@ class HomeScreen extends StatelessWidget {
       appBar: AppBar(
         title: const Text('VibzCheck'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.settings),
+            tooltip: 'Settings',
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const SettingsScreen()),
+              );
+            },
+          ),
+
           IconButton(
             icon: const Icon(Icons.logout),
             tooltip: 'Log out',
@@ -41,7 +53,9 @@ class HomeScreen extends StatelessWidget {
                   future: users.getUser(user.uid),
                   builder: (context, snap) {
                     final name =
-                        snap.data?.username ?? user.email?.split('@').first ?? '';
+                        snap.data?.username ??
+                        user.email?.split('@').first ??
+                        '';
                     return Text(
                       'Hey $name 👋',
                       style: Theme.of(context).textTheme.headlineMedium,
@@ -78,16 +92,11 @@ class HomeScreen extends StatelessWidget {
                 ),
                 onTap: () => Navigator.push(
                   context,
-                  MaterialPageRoute(
-                    builder: (_) => const JoinSessionScreen(),
-                  ),
+                  MaterialPageRoute(builder: (_) => const JoinSessionScreen()),
                 ),
               ),
               const SizedBox(height: AppSpacing.xl),
-              Text(
-                'Tips',
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
+              Text('Tips', style: Theme.of(context).textTheme.titleMedium),
               const SizedBox(height: AppSpacing.sm),
               const _TipRow(
                 icon: Icons.thumb_up_alt_outlined,
