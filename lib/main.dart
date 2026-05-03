@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import 'firebase_options.dart';
 import 'providers/auth_provider.dart';
 import 'providers/session_provider.dart';
+import 'providers/settings_provider.dart';
 import 'screens/auth_gate.dart';
 import 'theme/app_theme.dart';
 
@@ -22,6 +23,7 @@ class VibzCheckApp extends StatelessWidget {
       providers: [
         ChangeNotifierProvider(create: (_) => AuthProvider()),
         ChangeNotifierProvider(create: (_) => SessionProvider()),
+        ChangeNotifierProvider(create: (_) => SettingsProvider()),
       ],
       child: MaterialApp(
         debugShowCheckedModeBanner: false,

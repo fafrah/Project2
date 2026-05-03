@@ -1,19 +1,15 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import '../providers/settings_provider.dart';
+import 'profile_screen.dart';
 
-class SettingsScreen extends StatefulWidget {
+class SettingsScreen extends StatelessWidget {
   const SettingsScreen({Key? key}) : super(key: key);
 
   @override
-  State<SettingsScreen> createState() => _SettingsScreenState();
-}
-
-class _SettingsScreenState extends State<SettingsScreen> {
-  bool notificationsOn = true;
-  bool darkModeOn = true;
-  bool autoPlayOn = false;
-
-  @override
   Widget build(BuildContext context) {
+    final settings = context.watch<SettingsProvider>();
+
     return Scaffold(
       backgroundColor: const Color(0xFF121212),
 
@@ -46,7 +42,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
               const SizedBox(height: 12),
 
-              buildTile(icon: Icons.person, title: "Profile", onTap: () {}),
+              buildTile(
+                icon: Icons.person,
+                title: "Profile",
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const ProfileScreen()),
+                  );
+                },
+              ),
 
               buildTile(icon: Icons.lock, title: "Privacy", onTap: () {}),
 
@@ -66,33 +71,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
               buildSwitchTile(
                 icon: Icons.notifications,
                 title: "Notifications",
-                value: notificationsOn,
+                value: settings.notifications,
                 onChanged: (value) {
-                  setState(() {
-                    notificationsOn = value;
-                  });
+                  settings.toggleNotifications(value);
                 },
               ),
 
               buildSwitchTile(
                 icon: Icons.dark_mode,
                 title: "Dark Mode",
-                value: darkModeOn,
+                value: settings.darkMode,
                 onChanged: (value) {
-                  setState(() {
-                    darkModeOn = value;
-                  });
+                  settings.toggleDarkMode(value);
                 },
               ),
 
               buildSwitchTile(
                 icon: Icons.play_circle_fill,
                 title: "Auto Play",
-                value: autoPlayOn,
+                value: settings.autoPlay,
                 onChanged: (value) {
-                  setState(() {
-                    autoPlayOn = value;
-                  });
+                  settings.toggleAutoPlay(value);
                 },
               ),
 
