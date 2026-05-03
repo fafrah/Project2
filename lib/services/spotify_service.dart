@@ -10,7 +10,7 @@ class SpotifyService {
       : _fns =
             functions ?? FirebaseFunctions.instanceFor(region: 'us-central1');
 
-  Future<List<Track>> search(String query, {int limit = 20}) async {
+  Future<List<Track>> search(String query, {int limit = 10}) async {
     final res = await _fns.httpsCallable('spotifySearch').call({
       'q': query,
       'limit': limit,

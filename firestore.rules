@@ -83,11 +83,23 @@ service cloud.firestore {
         // permit any host update for now to keep playback flexible.
         && request.resource.data.hostUid == resource.data.hostUid;
 
+      // Any signed-in user joining or leaving the room bumps memberCount
+      // as part of the same transaction that writes their /members doc.
+      // The members subcollection rule below gates whether the join/leave
+      // is legitimate; here we only ensure no other top-level field
+      // changes during that bump.
+      allow update: if isSignedIn()
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['memberCount']);
+
       allow delete: if isHost();
 
       // -------- /sessions/{id}/members --------
       match /members/{memberUid} {
-        allow read: if isMember() || isHost();
+        // Members of the room can list each other; additionally, anyone
+        // can read their own member doc (needed for the collection-group
+        // query that finds which room the current user is in).
+        allow read: if isMember() || isHost() || isUser(memberUid);
         // A user joins by writing their own member doc. Role must be
         // 'member' (host doc is created server-side via batch on session
         // create, where the creator is also the host).

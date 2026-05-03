@@ -5,16 +5,14 @@ import 'package:provider/provider.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import '../models/queue_item.dart';
 import '../models/session.dart';
-import '../models/track.dart';
 import '../providers/auth_provider.dart';
 import '../providers/session_provider.dart';
 import '../services/playback_service.dart';
 import '../services/queue_service.dart';
 import '../services/session_service.dart';
-import '../services/spotify_service.dart';
+import '../services/spotify_host_service.dart';
 import '../services/vote_service.dart';
 import '../theme/app_theme.dart';
-import '../widgets/gradient_button.dart';
 import 'search_screen.dart';
 import 'session_chat_tab.dart';
 
@@ -26,24 +24,16 @@ class SessionScreen extends StatefulWidget {
   State<SessionScreen> createState() => _SessionScreenState();
 }
 
-class _SessionScreenState extends State<SessionScreen>
-    with SingleTickerProviderStateMixin {
+class _SessionScreenState extends State<SessionScreen> {
   final sessions = SessionService();
   final queue = QueueService();
   final votes = VoteService();
-  late final TabController _tabs;
+  int _tabIndex = 0;
 
   @override
   void initState() {
     super.initState();
-    _tabs = TabController(length: 3, vsync: this);
     context.read<SessionProvider>().setSession(widget.sessionId);
-  }
-
-  @override
-  void dispose() {
-    _tabs.dispose();
-    super.dispose();
   }
 
   Future<void> _leave() async {
@@ -72,19 +62,8 @@ class _SessionScreenState extends State<SessionScreen>
                 onPressed: _leave,
               ),
             ],
-            bottom: TabBar(
-              controller: _tabs,
-              indicatorColor: AppColors.primaryAlt,
-              labelColor: AppColors.textPrimary,
-              unselectedLabelColor: AppColors.textMuted,
-              tabs: const [
-                Tab(icon: Icon(Icons.queue_music), text: 'Queue'),
-                Tab(icon: Icon(Icons.chat_bubble_outline), text: 'Chat'),
-                Tab(icon: Icon(Icons.auto_awesome), text: 'Vibe'),
-              ],
-            ),
           ),
-          floatingActionButton: _tabs.index == 0
+          floatingActionButton: _tabIndex == 0
               ? FloatingActionButton.extended(
                   backgroundColor: AppColors.primary,
                   foregroundColor: Colors.white,
@@ -99,14 +78,28 @@ class _SessionScreenState extends State<SessionScreen>
                   ),
                 )
               : null,
+          bottomNavigationBar: NavigationBar(
+            selectedIndex: _tabIndex,
+            onDestinationSelected: (i) => setState(() => _tabIndex = i),
+            destinations: const [
+              NavigationDestination(
+                icon: Icon(Icons.queue_music),
+                label: 'Queue',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.chat_bubble_outline),
+                label: 'Chat',
+              ),
+            ],
+          ),
           body: session == null
               ? const Center(child: CircularProgressIndicator())
               : Column(
                   children: [
                     _NowPlayingHeader(session: session),
                     Expanded(
-                      child: TabBarView(
-                        controller: _tabs,
+                      child: IndexedStack(
+                        index: _tabIndex,
                         children: [
                           _QueueTab(
                             sessionId: widget.sessionId,
@@ -114,7 +107,6 @@ class _SessionScreenState extends State<SessionScreen>
                             votes: votes,
                           ),
                           SessionChatTab(sessionId: widget.sessionId),
-                          _VibeTab(sessionId: widget.sessionId),
                         ],
                       ),
                     ),
@@ -136,13 +128,17 @@ class _NowPlayingHeader extends StatefulWidget {
 
 class _NowPlayingHeaderState extends State<_NowPlayingHeader> {
   final playback = PlaybackService();
+  final hostSpotify = SpotifyHostService();
   Timer? _ticker;
+  Timer? _hostPoll;
   bool _autoAdvancing = false;
+  HostNowPlaying? _hostNow;
 
   @override
   void initState() {
     super.initState();
     _restartTicker();
+    _restartHostPoll();
   }
 
   @override
@@ -161,6 +157,25 @@ class _NowPlayingHeaderState extends State<_NowPlayingHeader> {
       setState(() {});
       _maybeAutoAdvance();
     });
+  }
+
+  void _restartHostPoll() {
+    _hostPoll?.cancel();
+    final user = context.read<AuthProvider>().user;
+    if (user?.uid != widget.session.hostUid) return;
+    _pollHost();
+    _hostPoll = Timer.periodic(const Duration(seconds: 3), (_) => _pollHost());
+  }
+
+  Future<void> _pollHost() async {
+    try {
+      final np = await hostSpotify.nowPlaying();
+      if (!mounted) return;
+      setState(() => _hostNow = np);
+    } catch (_) {
+      // Swallow — next tick retries. Common when Spotify isn't connected
+      // or there's no active device.
+    }
   }
 
   Future<void> _maybeAutoAdvance() async {
@@ -183,16 +198,31 @@ class _NowPlayingHeaderState extends State<_NowPlayingHeader> {
   @override
   void dispose() {
     _ticker?.cancel();
+    _hostPoll?.cancel();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     final session = widget.session;
-    final track = session.currentTrack;
-    final seed = track?.trackId ?? session.id;
     final user = context.watch<AuthProvider>().user;
     final isHost = user?.uid == session.hostUid;
+    // Prefer the host's real Spotify state when available; fall back
+    // to the room's queue-driven track.
+    final hostTrack = (_hostNow?.trackId != null)
+        ? NowPlaying(
+            trackId: _hostNow!.trackId!,
+            trackName: _hostNow!.trackName ?? '',
+            artist: _hostNow!.artist ?? '',
+            albumArt: _hostNow!.albumArt,
+            startedAt: DateTime.now()
+                .subtract(Duration(milliseconds: _hostNow!.progressMs)),
+            durationMs: _hostNow!.durationMs,
+            addedBy: session.hostUid,
+          )
+        : null;
+    final track = hostTrack ?? session.currentTrack;
+    final seed = track?.trackId ?? session.id;
 
     return Container(
       margin: const EdgeInsets.fromLTRB(
@@ -970,236 +1000,3 @@ class _EmptyQueue extends StatelessWidget {
   }
 }
 
-class _VibeTab extends StatefulWidget {
-  final String sessionId;
-  const _VibeTab({required this.sessionId});
-
-  @override
-  State<_VibeTab> createState() => _VibeTabState();
-}
-
-class _VibeTabState extends State<_VibeTab> {
-  final spotify = SpotifyService();
-  final queue = QueueService();
-
-  bool _loading = false;
-  String? _error;
-  List<Track> _recs = const [];
-
-  Future<void> _refresh() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
-    try {
-      final results = await spotify.recommend(sessionId: widget.sessionId);
-      if (!mounted) return;
-      setState(() {
-        _recs = results;
-        _loading = false;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _loading = false;
-        _error = _friendly(e);
-      });
-    }
-  }
-
-  String _friendly(Object e) {
-    final s = e.toString();
-    if (s.contains('failed-precondition')) {
-      return 'Add a few real Spotify tracks first — recommendations come from the room\'s shared taste.';
-    }
-    if (s.contains('SPOTIFY_CLIENT_ID') || s.contains('not-found')) {
-      return 'Spotify is not configured yet — set the Cloud Function secrets.';
-    }
-    if (s.contains('unauthenticated')) return 'Please sign in again.';
-    return 'Could not load recommendations.';
-  }
-
-  Future<void> _add(Track t) async {
-    final uid = context.read<AuthProvider>().user?.uid;
-    if (uid == null) return;
-    await queue.addToQueue(
-      sessionId: widget.sessionId,
-      track: t,
-      addedBy: uid,
-    );
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Added "${t.name}" to the queue')),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.all(AppSpacing.lg),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(
-            'Recommendations',
-            style: Theme.of(context).textTheme.titleLarge,
-          ),
-          const SizedBox(height: AppSpacing.xs),
-          const Text(
-            "Tuned to your room's shared taste.",
-            style: TextStyle(color: AppColors.textSecondary),
-          ),
-          const SizedBox(height: AppSpacing.md),
-          Expanded(child: _list()),
-          const SizedBox(height: AppSpacing.md),
-          GradientButton(
-            label: _recs.isEmpty
-                ? 'Get recommendations'
-                : 'Refresh recommendations',
-            icon: Icons.auto_awesome,
-            loading: _loading,
-            onPressed: _refresh,
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _list() {
-    if (_error != null) {
-      return _VibeMessage(icon: Icons.info_outline, text: _error!);
-    }
-    if (_recs.isEmpty && !_loading) {
-      return _VibeMessage(
-        icon: Icons.auto_awesome,
-        text:
-            "Tap below to surface tracks tuned to your room's averaged energy, valence, and tempo.",
-      );
-    }
-    if (_recs.isEmpty && _loading) {
-      return const Center(child: CircularProgressIndicator());
-    }
-    return ListView.separated(
-      itemCount: _recs.length,
-      separatorBuilder: (_, _) => const SizedBox(height: AppSpacing.sm),
-      itemBuilder: (context, i) {
-        final t = _recs[i];
-        return _RecTile(track: t, onAdd: () => _add(t));
-      },
-    );
-  }
-}
-
-class _VibeMessage extends StatelessWidget {
-  final IconData icon;
-  final String text;
-  const _VibeMessage({required this.icon, required this.text});
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.lg),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, color: AppColors.textMuted, size: 48),
-            const SizedBox(height: AppSpacing.sm),
-            Text(
-              text,
-              textAlign: TextAlign.center,
-              style: const TextStyle(color: AppColors.textSecondary),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _RecTile extends StatelessWidget {
-  final Track track;
-  final VoidCallback onAdd;
-  const _RecTile({required this.track, required this.onAdd});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.circular(AppRadius.md),
-        border: Border.all(color: AppColors.border),
-      ),
-      padding: const EdgeInsets.all(AppSpacing.sm),
-      child: Row(
-        children: [
-          ClipRRect(
-            borderRadius: BorderRadius.circular(AppRadius.sm),
-            child: track.albumArt != null
-                ? Image.network(
-                    track.albumArt!,
-                    width: 48,
-                    height: 48,
-                    fit: BoxFit.cover,
-                    errorBuilder: (_, _, _) => Container(
-                      width: 48,
-                      height: 48,
-                      decoration: BoxDecoration(
-                        gradient: MoodColor.gradientForSeed(track.id),
-                      ),
-                      child: const Icon(
-                        Icons.music_note,
-                        color: Colors.white,
-                      ),
-                    ),
-                  )
-                : Container(
-                    width: 48,
-                    height: 48,
-                    decoration: BoxDecoration(
-                      gradient: MoodColor.gradientForSeed(track.id),
-                    ),
-                    child: const Icon(
-                      Icons.music_note,
-                      color: Colors.white,
-                    ),
-                  ),
-          ),
-          const SizedBox(width: AppSpacing.md),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  track.name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: AppColors.textPrimary,
-                    fontSize: 15,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  track.artist,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: AppColors.textSecondary,
-                    fontSize: 13,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          IconButton(
-            icon: const Icon(Icons.add_circle, color: AppColors.primary),
-            iconSize: 32,
-            onPressed: onAdd,
-          ),
-        ],
-      ),
-    );
-  }
-}

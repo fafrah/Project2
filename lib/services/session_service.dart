@@ -30,6 +30,7 @@ class SessionService {
     final batch = _db.batch();
     batch.set(ref, session.toMap());
     batch.set(ref.collection('members').doc(hostUid), {
+      'uid': hostUid,
       'username': hostUsername,
       'joinedAt': Timestamp.now(),
       'role': 'host',
@@ -61,6 +62,7 @@ class SessionService {
       final memberSnap = await tx.get(memberRef);
       if (!memberSnap.exists) {
         tx.set(memberRef, {
+          'uid': uid,
           'username': username,
           'joinedAt': Timestamp.now(),
           'role': 'member',
@@ -94,6 +96,31 @@ class SessionService {
         .snapshots()
         .where((s) => s.exists)
         .map(Session.fromDoc);
+  }
+
+  /// Streams the active session this user belongs to, or null if none.
+  /// A user is in at most one session at a time (enforced on join/create).
+  ///
+  /// Implementation note: Firestore collection-group queries with
+  /// `FieldPath.documentId` require a *full* path, not just a doc id.
+  /// Instead we filter by an explicit `uid` field on each member doc and
+  /// backfill it on join/create.
+  Stream<Session?> streamMyActiveSession(String uid) {
+    return _db
+        .collectionGroup('members')
+        .where('uid', isEqualTo: uid)
+        .snapshots()
+        .asyncMap((qs) async {
+          for (final m in qs.docs) {
+            final sessionRef = m.reference.parent.parent;
+            if (sessionRef == null) continue;
+            final snap = await sessionRef.get();
+            if (!snap.exists) continue;
+            final session = Session.fromDoc(snap);
+            if (session.isActive) return session;
+          }
+          return null;
+        });
   }
 
   Stream<List<Map<String, dynamic>>> streamMembers(String sessionId) {
